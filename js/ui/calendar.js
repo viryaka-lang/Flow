@@ -166,10 +166,15 @@ export class CalendarView {
               <h3 class="text-sm font-bold text-white">${this.selectedDate}</h3>
             </div>
             
-            <button onclick="window.app.openLogger('${this.selectedDate}')" class="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-primary text-white text-xs font-bold shadow-md hover:opacity-90">
-              ${Icons.edit("w-3.5 h-3.5")}
-              <span>Log / Edit Day</span>
-            </button>
+            <div class="flex items-center gap-2">
+              <button onclick="window.app.openPeriodStartModal('${this.selectedDate}')" class="flex items-center gap-1 px-3 py-1.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/40 text-xs font-bold hover:bg-rose-500/30 transition-all" title="Mark this date as Day 1 of Period">
+                <span>🩸 Started Here</span>
+              </button>
+              <button onclick="window.app.openLogger('${this.selectedDate}')" class="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-primary text-white text-xs font-bold shadow-md hover:opacity-90">
+                ${Icons.edit("w-3.5 h-3.5")}
+                <span>Log Day</span>
+              </button>
+            </div>
           </div>
 
           <!-- Summary for selected date -->

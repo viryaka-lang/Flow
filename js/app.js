@@ -127,6 +127,209 @@ export class FlowApp {
     this.doctorReport.open();
   }
 
+  async setPeriodStartDate(dateStr) {
+    if (!this.activeProfile) return;
+    
+    // Find if a cycle exists on or near this date
+    let existingCycle = this.cycles.find(c => c.startDate === dateStr);
+    if (!existingCycle) {
+      const latestCycle = CycleEngine.getActiveCycle(this.cycles);
+      if (latestCycle && !latestCycle.endDate && Math.abs(CycleEngine.diffDays(latestCycle.startDate, dateStr)) < 20) {
+        latestCycle.startDate = dateStr;
+        await this.db.saveCycle(latestCycle);
+      } else {
+        const newCycle = {
+          profileId: this.activeProfile.id,
+          startDate: dateStr,
+          endDate: null,
+          periodLength: this.activeProfile.avgPeriodLength || 5,
+          notes: "Period start date"
+        };
+        await this.db.saveCycle(newCycle);
+      }
+    }
+
+    // Mark period flow in dailyLogs
+    let log = await this.db.getDailyLog(this.activeProfile.id, dateStr);
+    if (!log) {
+      log = {
+        profileId: this.activeProfile.id,
+        date: dateStr,
+        flow: "medium",
+        symptoms: [],
+        moods: [],
+        water: 0
+      };
+    } else {
+      log.flow = "medium";
+    }
+    await this.db.saveDailyLog(log);
+
+    // Auto populate remaining period days if not logged
+    const periodDays = this.activeProfile.avgPeriodLength || 5;
+    for (let i = 1; i < periodDays; i++) {
+      const nextDate = CycleEngine.toDateStr(CycleEngine.addDays(CycleEngine.parseDate(dateStr), i));
+      let nextLog = await this.db.getDailyLog(this.activeProfile.id, nextDate);
+      if (!nextLog || !nextLog.flow || nextLog.flow === "none") {
+        const flowLvl = (i < 3) ? "medium" : "light";
+        await this.db.saveDailyLog({
+          profileId: this.activeProfile.id,
+          date: nextDate,
+          flow: flowLvl,
+          symptoms: nextLog?.symptoms || [],
+          moods: nextLog?.moods || [],
+          water: nextLog?.water || 0
+        });
+      }
+    }
+
+    await this.loadData();
+    this.render();
+    this.pwaController.vibrate([25, 50, 25]);
+    this.pwaController.showToast(`Period start date updated to ${dateStr}!`);
+  }
+
+  
+  openPeriodStartModal(defaultDate = null) {
+    const targetDate = defaultDate || CycleEngine.toDateStr(new Date());
+    const modal = document.getElementById("period-start-modal");
+    if (!modal) return;
+
+    modal.innerHTML = `
+      <div class="bottom-sheet-content">
+        <div class="sheet-handle"></div>
+        <div class="p-5 space-y-4 max-h-[85vh] overflow-y-auto pb-10 text-white">
+          <div class="flex items-center justify-between border-b border-white/10 pb-3">
+            <div class="flex items-center gap-2">
+              <span class="text-xl">🩸</span>
+              <h2 class="text-base font-extrabold">Set Period Start Date</h2>
+            </div>
+            <button onclick="document.getElementById('period-start-modal').classList.remove('open')" class="p-1 rounded-full text-slate-400">
+              ${Icons.x("w-5 h-5")}
+            </button>
+          </div>
+
+          <div class="space-y-1.5">
+            <label class="text-xs font-bold text-slate-300">When did your period start?</label>
+            <input id="period-start-datepicker" type="date" value="${targetDate}"
+              class="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white font-bold text-sm focus:border-primary outline-none" />
+          </div>
+
+          <div class="space-y-1.5">
+            <label class="text-xs font-bold text-slate-300">Estimated Duration (Days)</label>
+            <div class="grid grid-cols-5 gap-2">
+              ${[3, 4, 5, 6, 7].map(num => `
+                <button type="button" onclick="document.getElementById('period-duration-input').value = ${num}; this.parentElement.querySelectorAll('button').forEach(b => b.classList.remove('bg-primary', 'text-white')); this.classList.add('bg-primary', 'text-white');"
+                  class="py-2 rounded-xl bg-white/5 border border-white/10 text-xs font-bold ${num === (this.activeProfile?.avgPeriodLength || 5) ? "bg-primary text-white" : "text-slate-300"}">
+                  ${num} Days
+                </button>
+              `).join("")}
+            </div>
+            <input id="period-duration-input" type="hidden" value="${this.activeProfile?.avgPeriodLength || 5}" />
+          </div>
+
+          <div class="space-y-1.5">
+            <label class="text-xs font-bold text-slate-300">Flow Intensity</label>
+            <div class="grid grid-cols-4 gap-2">
+              ${["spotting", "light", "medium", "heavy"].map(f => `
+                <button type="button" onclick="document.getElementById('period-flow-input').value = '${f}'; this.parentElement.querySelectorAll('button').forEach(b => b.classList.remove('bg-primary', 'text-white')); this.classList.add('bg-primary', 'text-white');"
+                  class="py-2 rounded-xl bg-white/5 border border-white/10 text-xs font-bold capitalize ${f === "medium" ? "bg-primary text-white" : "text-slate-300"}">
+                  ${f}
+                </button>
+              `).join("")}
+            </div>
+            <input id="period-flow-input" type="hidden" value="medium" />
+          </div>
+
+          <button onclick="window.app.applyPeriodStartDateFromModal()"
+            class="w-full py-3.5 rounded-xl bg-primary text-white font-extrabold text-sm shadow-xl shadow-primary/30 hover:opacity-95 transition-all mt-2">
+            Confirm & Update Cycle
+          </button>
+        </div>
+      </div>
+    `;
+    modal.classList.add("open");
+    this.pwaController.vibrate([20]);
+  }
+
+  async applyPeriodStartDateFromModal() {
+    const dateInput = document.getElementById("period-start-datepicker");
+    const durInput = document.getElementById("period-duration-input");
+    const flowInput = document.getElementById("period-flow-input");
+
+    if (!dateInput || !dateInput.value) {
+      alert("Please select a valid date");
+      return;
+    }
+
+    const dateStr = dateInput.value;
+    const duration = parseInt(durInput?.value || "5") || 5;
+    const flowLevel = flowInput?.value || "medium";
+
+    await this.savePeriodRecord(dateStr, duration, flowLevel);
+    const modal = document.getElementById("period-start-modal");
+    if (modal) modal.classList.remove("open");
+  }
+
+  async savePeriodRecord(dateStr, duration = 5, flowLevel = "medium") {
+    if (!this.activeProfile) return;
+
+    // Find if a cycle exists with this exact start date
+    let existingCycle = this.cycles.find(c => c.startDate === dateStr);
+    if (!existingCycle) {
+      const latestCycle = CycleEngine.getActiveCycle(this.cycles);
+      if (latestCycle && !latestCycle.endDate && Math.abs(CycleEngine.diffDays(latestCycle.startDate, dateStr)) < 22) {
+        latestCycle.startDate = dateStr;
+        latestCycle.periodLength = duration;
+        await this.db.saveCycle(latestCycle);
+      } else {
+        const newCycle = {
+          profileId: this.activeProfile.id,
+          startDate: dateStr,
+          endDate: null,
+          periodLength: duration,
+          notes: "Recorded period"
+        };
+        await this.db.saveCycle(newCycle);
+      }
+    }
+
+    // Populate daily period flow
+    for (let i = 0; i < duration; i++) {
+      const pDate = CycleEngine.toDateStr(CycleEngine.addDays(CycleEngine.parseDate(dateStr), i));
+      let log = await this.db.getDailyLog(this.activeProfile.id, pDate);
+      const intensity = (i === 0) ? flowLevel : (i < 3) ? "medium" : "light";
+      if (!log) {
+        log = {
+          profileId: this.activeProfile.id,
+          date: pDate,
+          flow: intensity,
+          symptoms: [],
+          moods: []
+        };
+      } else {
+        log.flow = intensity;
+      }
+      await this.db.saveDailyLog(log);
+    }
+
+    await this.loadData();
+    this.render();
+    this.pwaController.vibrate([30, 50, 30]);
+    this.pwaController.showToast(`Period recorded starting ${dateStr}!`);
+  }
+
+  promptChangePeriodStartDate() {
+    const currentStart = this.cycles[0]?.startDate || CycleEngine.toDateStr(new Date());
+    const newDate = prompt("Enter new Period Start Date (YYYY-MM-DD):", currentStart);
+    if (newDate && /^\d{4}-\d{2}-\d{2}$/.test(newDate)) {
+      this.setPeriodStartDate(newDate);
+    } else if (newDate) {
+      alert("Invalid date format. Please use YYYY-MM-DD (e.g. 2026-08-20)");
+    }
+  }
+
+
   async quickLogFlow(dateStr, flowLevel) {
     if (!this.activeProfile) return;
     let log = await this.db.getDailyLog(this.activeProfile.id, dateStr);

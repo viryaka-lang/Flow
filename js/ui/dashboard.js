@@ -81,6 +81,11 @@ export class DashboardView {
                   : `<span class="text-slate-300">Next period in <strong class="text-white">${status.daysUntilPeriod} days</strong></span>`
                 }
               </p>
+              
+              <!-- Quick Period Start Date Adjust Button -->
+              <button onclick="window.app.openPeriodStartModal('${status.cycleStartDate}')" class="mt-1 text-[10px] font-bold text-slate-400 hover:text-primary underline flex items-center gap-1 transition-all">
+                <span>Start: ${status.cycleStartDate}</span> ✏️
+              </button>
             </div>
           </div>
 
@@ -91,6 +96,23 @@ export class DashboardView {
             <span class="font-bold text-white">${phase.pregnancyChance} (${phase.pregnancyPercent}%)</span>
           </div>
         </div>
+
+        
+        <!-- Quick 'Period Started Today' Quick Action Banner -->
+        ${status.cycleDay > (profile?.avgPeriodLength || 5) ? `
+          <div class="glass-card p-3.5 bg-gradient-to-r from-rose-950/40 to-purple-950/40 border-rose-500/30 flex items-center justify-between">
+            <div class="flex items-center gap-2.5">
+              <span class="text-xl p-1.5 rounded-xl bg-rose-500/20 text-rose-400">🩸</span>
+              <div>
+                <h4 class="text-xs font-bold text-white">Period started today?</h4>
+                <p class="text-[10px] text-slate-300">Tap to start Day 1 of your new cycle</p>
+              </div>
+            </div>
+            <button onclick="window.app.openPeriodStartModal('${todayStr}')" class="px-3.5 py-1.5 rounded-full bg-primary text-white text-xs font-extrabold shadow-md shadow-primary/30 hover:opacity-90 transition-all">
+              Log Day 1
+            </button>
+          </div>
+        ` : ""}
 
         <!-- Today's Quick Log Summary & Quick Chips -->
         <div class="glass-card p-4 space-y-3">
