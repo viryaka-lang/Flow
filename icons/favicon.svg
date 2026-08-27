@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <linearGradient id="roseGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FF5E7E"/>
+      <stop offset="100%" stop-color="#FF99AC"/>
+    </linearGradient>
+  </defs>
+  <circle cx="50" cy="50" r="48" fill="#181528"/>
+  <path d="M50 20 C50 20, 30 45, 30 60 C30 71.0457 38.9543 80 50 80 C61.0457 80 70 71.0457 70 60 C70 45, 50 20, 50 20 Z" fill="url(#roseGrad)"/>
+  <circle cx="45" cy="55" r="4" fill="#FFFFFF" opacity="0.6"/>
+</svg>

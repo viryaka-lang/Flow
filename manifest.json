@@ -1,0 +1,48 @@
+﻿{
+  "name": "FlowSync - Multi-Profile Cycle & Period Tracker",
+  "short_name": "FlowSync",
+  "description": "Privacy-first period, menstrual cycle, ovulation, and fertility tracker with multi-profile monitoring and cycle analysis.",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#0F0E17",
+  "theme_color": "#FF5E7E",
+  "orientation": "portrait-primary",
+  "categories": ["health", "medical", "lifestyle"],
+  "icons": [
+    {
+      "src": "./icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "./icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Log Today",
+      "short_name": "Log",
+      "description": "Quickly log today flow, symptoms, and mood",
+      "url": "./index.html#log",
+      "icons": [{ "src": "./icons/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Calendar View",
+      "short_name": "Calendar",
+      "description": "View menstrual cycle calendar and predictions",
+      "url": "./index.html#calendar",
+      "icons": [{ "src": "./icons/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Switch Profile",
+      "short_name": "Profiles",
+      "description": "Switch between monitored profiles",
+      "url": "./index.html#profiles",
+      "icons": [{ "src": "./icons/icon-192.png", "sizes": "192x192" }]
+    }
+  ]
+}
