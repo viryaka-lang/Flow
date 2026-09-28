@@ -1,100 +1,52 @@
-﻿// FlowSync PWA Service Worker
-const CACHE_NAME = "flowsync-pwa-v1.0.0";
-const ASSETS_TO_CACHE = [
+// Flow service worker: works offline, and always prefers fresh files when online
+// so an update is picked up on the next launch instead of being served stale.
+const CACHE_NAME = "flow-v2";
+const ASSETS = [
   "./",
   "./index.html",
   "./manifest.json",
-  "./css/styles.css",
-  "./js/app.js",
-  "./js/db.js",
-  "./js/engine.js",
-  "./js/icons.js",
-  "./js/ui/dashboard.js",
-  "./js/ui/calendar.js",
-  "./js/ui/logger.js",
-  "./js/ui/analytics.js",
-  "./js/ui/profiles.js",
-  "./js/ui/reports.js",
-  "./js/ui/settings.js",
-  "./js/ui/pwa.js",
+  "./css/flow.css",
+  "./js/main.js",
+  "./js/cycle.js",
+  "./js/dates.js",
+  "./js/store.js",
+  "./icons/favicon.svg",
   "./icons/icon-192.png",
-  "./icons/icon-512.png",
-  "./icons/favicon.svg"
+  "./icons/icon-512.png"
 ];
 
-self.addEventListener("install", (event) => {
+self.addEventListener("install", event => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      console.log("[ServiceWorker] Pre-caching offline assets");
-      return cache.addAll(ASSETS_TO_CACHE).catch(err => {
-        console.warn("[ServiceWorker] Precache note:", err);
-      });
-    }).then(() => self.skipWaiting())
+    caches.open(CACHE_NAME).then(cache => cache.addAll(ASSETS)).then(() => self.skipWaiting())
   );
 });
 
-self.addEventListener("activate", (event) => {
+self.addEventListener("activate", event => {
   event.waitUntil(
-    caches.keys().then((keyList) => {
-      return Promise.all(
-        keyList.map((key) => {
-          if (key !== CACHE_NAME) {
-            console.log("[ServiceWorker] Removing old cache:", key);
-            return caches.delete(key);
-          }
-        })
-      );
-    }).then(() => self.clients.claim())
+    caches.keys()
+      .then(keys => Promise.all(keys.filter(key => key !== CACHE_NAME).map(key => caches.delete(key))))
+      .then(() => self.clients.claim())
   );
 });
 
-self.addEventListener("fetch", (event) => {
-  if (event.request.mode === "navigate") {
-    event.respondWith(
-      fetch(event.request).catch(() => caches.match("./index.html"))
-    );
-    return;
-  }
+self.addEventListener("fetch", event => {
+  const { request } = event;
+  if (request.method !== "GET" || new URL(request.url).origin !== self.location.origin) return;
 
   event.respondWith(
-    caches.match(event.request).then((cachedResponse) => {
-      if (cachedResponse) {
-        fetch(event.request).then((networkResponse) => {
-          if (networkResponse && networkResponse.status === 200) {
-            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, networkResponse));
-          }
-        }).catch(() => {});
-        return cachedResponse;
-      }
-      return fetch(event.request);
-    })
-  );
-});
-
-self.addEventListener("push", (event) => {
-  const data = event.data ? event.data.json() : { title: "FlowSync Reminder", body: "Check in on your cycle health today!" };
-  const options = {
-    body: data.body,
-    icon: "./icons/icon-192.png",
-    badge: "./icons/icon-192.png",
-    vibrate: [100, 50, 100],
-    data: { url: "./index.html" }
-  };
-  event.waitUntil(self.registration.showNotification(data.title, options));
-});
-
-self.addEventListener("notificationclick", (event) => {
-  event.notification.close();
-  event.waitUntil(
-    clients.matchAll({ type: "window" }).then((clientList) => {
-      for (const client of clientList) {
-        if (client.url.includes("index.html") && "focus" in client) {
-          return client.focus();
+    fetch(request)
+      .then(response => {
+        if (response.ok) {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then(cache => cache.put(request, copy));
         }
-      }
-      if (clients.openWindow) {
-        return clients.openWindow("./index.html");
-      }
-    })
+        return response;
+      })
+      .catch(async () => {
+        const cached = await caches.match(request, { ignoreSearch: true });
+        if (cached) return cached;
+        if (request.mode === "navigate") return caches.match("./index.html");
+        return Response.error();
+      })
   );
 });
