@@ -67,6 +67,27 @@ button, input { font: inherit; color: inherit; }
   font-size: 1.1rem;
 }
 .logo { color: var(--accent); }
+.who {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 60%;
+  min-height: 36px;
+  padding: 4px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  font-size: 0.9rem;
+  font-weight: 650;
+  cursor: pointer;
+}
+.who span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.people li { align-items: center; }
+.people .row-btn { flex: 1; min-width: 0; }
+.people .row-btn strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.people [aria-current="true"] > .muted { color: var(--accent); }
+.sheet .people { margin-bottom: 12px; }
 
 main { padding: 16px; display: grid; gap: 14px; }
 

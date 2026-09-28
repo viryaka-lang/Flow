@@ -6,6 +6,9 @@ It does two things:
 1. **Tracks when each period starts and ends.**
 2. **Predicts the next periods** from your own history.
 
+You can track several people (e.g. yourself and a daughter). Each has their own periods,
+typical lengths and predictions. Switch between them with the name button at the top right.
+
 All data stays on your device (localStorage). There are no accounts, servers or trackers.
 
 ## Using it
@@ -17,8 +20,9 @@ All data stays on your device (localStorage). There are no accounts, servers or 
   a start or an end, edit or delete a period.
 - **History**: every logged period with its length and cycle length. Add past periods here
   to get personalised predictions straight away.
-- **Settings**: typical cycle/period length (used until you've logged enough periods),
-  export/import a JSON backup, erase all data.
+- **Settings**: add, rename or delete people; typical cycle/period length for the person
+  shown (used until they've logged enough periods); export/import a JSON backup of everyone;
+  erase all data.
 
 ## How predictions work
 
@@ -33,9 +37,10 @@ The logic lives in `js/cycle.js` (pure functions) and is covered by `tests/cycle
 
 ## Upgrading from FlowSync
 
-On first launch, Flow imports your periods from the old FlowSync app on the same device.
-It uses the profile that was active and skips FlowSync's demo profiles (Sarah, Elena, Maya).
-The old data itself is left untouched. Old FlowSync backup files can also be imported from Settings.
+On first launch, Flow imports your profiles and periods from the old FlowSync app on the same
+device. FlowSync's demo profiles (Sarah, Elena, Maya) are skipped unless you logged periods on
+them; a demo profile you used under its made-up name is imported as "Me". The old data itself
+is left untouched. Old FlowSync backup files can also be imported from Settings.
 
 ## Development
 

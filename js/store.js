@@ -1,8 +1,10 @@
 // Persistence: one small JSON document in localStorage, kept on this device.
+// Shape: { version: 3, activeProfileId, profiles: [{ id, name, settings, periods }] }
 import { DEFAULT_SETTINGS, sortPeriods } from "./cycle.js";
 import { addDays, diffDays, isValidKey, todayKey } from "./dates.js";
 
 const STORAGE_KEY = "flow.v2";
+export const MAX_NAME_LENGTH = 40;
 
 export function newId() {
   return `p_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
@@ -43,17 +45,44 @@ export function normalizePeriods(periods) {
   return result;
 }
 
+export function cleanName(name, fallback = "Me") {
+  const trimmed = String(name ?? "").replace(/\s+/g, " ").trim().slice(0, MAX_NAME_LENGTH);
+  return trimmed || fallback;
+}
+
+export function newProfile(name = "Me", settings = DEFAULT_SETTINGS, periods = []) {
+  return { id: newId(), name: cleanName(name), settings: normalizeSettings(settings), periods: normalizePeriods(periods) };
+}
+
 export function emptyState() {
-  return { version: 2, periods: [], settings: { ...DEFAULT_SETTINGS } };
+  const profile = newProfile();
+  return { version: 3, activeProfileId: profile.id, profiles: [profile] };
+}
+
+// Accepts the current format and the earlier single-person one
+// ({ periods, settings }), and repairs anything malformed.
+export function normalizeState(raw) {
+  const source = Array.isArray(raw?.profiles)
+    ? raw.profiles
+    : [{ name: "Me", periods: raw?.periods, settings: raw?.settings }];
+  const profiles = source
+    .filter(p => p && typeof p === "object")
+    .map((p, i) => ({
+      id: typeof p.id === "string" && p.id ? p.id : newId(),
+      name: cleanName(p.name, `Person ${i + 1}`),
+      settings: normalizeSettings(p.settings),
+      periods: normalizePeriods(p.periods)
+    }));
+  if (!profiles.length) return emptyState();
+  const active = profiles.find(p => p.id === raw?.activeProfileId) || profiles[0];
+  return { version: 3, activeProfileId: active.id, profiles };
 }
 
 // Returns null when nothing has been saved yet.
 export function loadState() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    return { version: 2, periods: normalizePeriods(parsed.periods), settings: normalizeSettings(parsed.settings) };
+    return raw ? normalizeState(JSON.parse(raw)) : null;
   } catch (err) {
     console.warn("[Flow] Could not read saved data:", err);
     return null;
@@ -67,18 +96,21 @@ export function saveState(state) {
 export function exportState(state) {
   return {
     app: "flow",
-    version: 2,
+    version: 3,
     exportedAt: new Date().toISOString(),
-    periods: state.periods.map(({ start, end }) => ({ start, end })),
-    settings: state.settings
+    activeProfileId: state.activeProfileId,
+    profiles: state.profiles.map(p => ({
+      id: p.id,
+      name: p.name,
+      settings: p.settings,
+      periods: p.periods.map(({ start, end }) => ({ start, end }))
+    }))
   };
 }
 
-// Accepts a Flow backup or a backup from the old FlowSync version.
+// Accepts a Flow backup (any version) or a backup from the old FlowSync app.
 export function importState(json) {
-  if (json && Array.isArray(json.periods)) {
-    return { version: 2, periods: normalizePeriods(json.periods), settings: normalizeSettings(json.settings) };
-  }
+  if (json && (json.app === "flow" || Array.isArray(json.periods))) return normalizeState(json);
   if (json && Array.isArray(json.profiles)) {
     const legacy = extractLegacy({
       profiles: json.profiles,
@@ -94,18 +126,17 @@ export function importState(json) {
 // --- Migration from the old FlowSync app (IndexedDB "flowsync_pwa_db") ---
 
 // FlowSync inserted these demo profiles on first launch; their data isn't real.
-const DEMO_PROFILE_IDS = new Set(["prof_sarah_regular", "prof_elena_ttc", "prof_maya_irregular"]);
+const DEMO_PROFILES = {
+  prof_sarah_regular: "Sarah Miller",
+  prof_elena_ttc: "Elena Rostova",
+  prof_maya_irregular: "Maya Lin"
+};
 const DEMO_CYCLE_ID = /^cyc_(sarah_\d+|elena_curr|maya_curr)$/;
 
-// Turns the active FlowSync profile's logs into { start, end } periods.
-// Returns null when there is nothing real to import.
-export function extractLegacy({ profiles = [], cycles = [], dailyLogs = [], settings = [] }) {
-  const global = settings.find(s => s && s.id === "global") || {};
-  const profile = profiles.find(p => p.id === global.activeProfileId) || profiles[0];
-  if (!profile) return null;
-
+// Turns one FlowSync profile's logs into { start, end } periods.
+function legacyPeriods(profile, cycles, dailyLogs) {
   // On a demo profile, only keep what the user changed after it was created.
-  const isDemo = DEMO_PROFILE_IDS.has(profile.id);
+  const isDemo = profile.id in DEMO_PROFILES;
   const seededAt = Date.parse(profile.createdAt) || 0;
   const editedByUser = log => !isDemo || (Date.parse(log.updatedAt) || 0) > seededAt + 2 * 60 * 1000;
 
@@ -126,7 +157,6 @@ export function extractLegacy({ profiles = [], cycles = [], dailyLogs = [], sett
     const length = clampInt(cycle.periodLength, 1, 15, 5);
     for (let i = 0; i < length; i++) addDay(addDays(cycle.startDate, i));
   }
-  if (!days.size) return null;
 
   // Group bleeding days into periods, allowing a single unlogged day inside one.
   const periods = [];
@@ -137,16 +167,35 @@ export function extractLegacy({ profiles = [], cycles = [], dailyLogs = [], sett
   }
   // FlowSync pre-filled days ahead of today; that period is still going.
   const last = periods[periods.length - 1];
-  if (hadFutureDays && last.end === today) last.end = null;
+  if (last && hadFutureDays && last.end === today) last.end = null;
+  return periods;
+}
 
-  return {
-    version: 2,
-    periods: normalizePeriods(periods),
-    settings: isDemo ? { ...DEFAULT_SETTINGS } : normalizeSettings({
-      cycleLength: profile.avgCycleLength,
-      periodLength: profile.avgPeriodLength
-    })
-  };
+// Converts FlowSync data into Flow state. Demo profiles are only kept if the
+// user logged something on them. Returns null when there is nothing real.
+export function extractLegacy({ profiles = [], cycles = [], dailyLogs = [], settings = [] }) {
+  const global = settings.find(s => s && s.id === "global") || {};
+  const imported = [];
+  let activeProfileId = null;
+
+  for (const old of profiles) {
+    if (!old || typeof old.id !== "string") continue;
+    const isDemo = old.id in DEMO_PROFILES;
+    const periods = legacyPeriods(old, cycles, dailyLogs);
+    if (isDemo && !periods.length) continue;
+
+    // A demo profile the user logged on under its made-up name is really theirs.
+    const name = isDemo && old.name === DEMO_PROFILES[old.id] ? "Me" : cleanName(old.name);
+    const settings = isDemo
+      ? DEFAULT_SETTINGS
+      : { cycleLength: old.avgCycleLength, periodLength: old.avgPeriodLength };
+    const profile = newProfile(name, settings, periods);
+    imported.push(profile);
+    if (old.id === global.activeProfileId) activeProfileId = profile.id;
+  }
+
+  if (!imported.length) return null;
+  return { version: 3, activeProfileId: activeProfileId || imported[0].id, profiles: imported };
 }
 
 function readLegacyDatabase() {

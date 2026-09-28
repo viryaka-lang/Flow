@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { addDays, todayKey } from "../js/dates.js";
 import { buildDayMap, computeStats, getStatus, predictPeriods, validatePeriod } from "../js/cycle.js";
-import { extractLegacy, normalizePeriods } from "../js/store.js";
+import { extractLegacy, normalizePeriods, normalizeState } from "../js/store.js";
 
 const settings = { cycleLength: 28, periodLength: 5 };
 const p = (id, start, end) => ({ id, start, end });
@@ -103,8 +103,14 @@ test("legacy import skips FlowSync demo data but keeps the user's own logs", () 
   const today = todayKey();
   const legacy = {
     settings: [{ id: "global", activeProfileId: "prof_sarah_regular" }],
-    profiles: [{ id: "prof_sarah_regular", createdAt: seededAt }],
-    cycles: [{ id: "cyc_sarah_1", profileId: "prof_sarah_regular", startDate: "2025-12-01", periodLength: 5 }],
+    profiles: [
+      { id: "prof_sarah_regular", name: "Sarah Miller", createdAt: seededAt },
+      { id: "prof_elena_ttc", name: "Elena Rostova", createdAt: seededAt }
+    ],
+    cycles: [
+      { id: "cyc_sarah_1", profileId: "prof_sarah_regular", startDate: "2025-12-01", periodLength: 5 },
+      { id: "cyc_elena_curr", profileId: "prof_elena_ttc", startDate: "2026-01-01", periodLength: 5 }
+    ],
     dailyLogs: [
       { profileId: "prof_sarah_regular", date: "2025-12-01", flow: "heavy", updatedAt: seededAt },
       { profileId: "prof_sarah_regular", date: "2026-02-10", flow: "medium", updatedAt: later },
@@ -118,10 +124,50 @@ test("legacy import skips FlowSync demo data but keeps the user's own logs", () 
     ]
   };
   const result = extractLegacy(legacy);
-  assert.deepEqual(result.periods.map(({ start, end }) => [start, end]), [
+  // The untouched demo profile (Elena) is dropped; Sarah, used for real, becomes "Me".
+  assert.equal(result.profiles.length, 1);
+  assert.equal(result.profiles[0].name, "Me");
+  assert.equal(result.activeProfileId, result.profiles[0].id);
+  assert.deepEqual(result.profiles[0].periods.map(({ start, end }) => [start, end]), [
     ["2026-02-10", "2026-02-13"],
     [addDays(today, -1), null]
   ]);
+});
+
+test("legacy import keeps every real profile, even ones with no periods yet", () => {
+  const result = extractLegacy({
+    settings: [{ id: "global", activeProfileId: "prof_2" }],
+    profiles: [
+      { id: "prof_1", name: "Anna", avgCycleLength: 32, avgPeriodLength: 4 },
+      { id: "prof_2", name: "Mia", avgCycleLength: 28, avgPeriodLength: 5 }
+    ],
+    cycles: [{ id: "cyc_1", profileId: "prof_1", startDate: "2026-01-01", periodLength: 4 }],
+    dailyLogs: []
+  });
+  assert.deepEqual(result.profiles.map(p => [p.name, p.periods.length, p.settings.cycleLength]), [
+    ["Anna", 1, 32],
+    ["Mia", 0, 28]
+  ]);
+  assert.equal(result.activeProfileId, result.profiles[1].id);
+});
+
+test("normalizeState reads the single-person format and repairs profiles", () => {
+  const single = normalizeState({ periods: [{ start: "2026-01-01", end: "2026-01-05" }], settings: { cycleLength: 30 } });
+  assert.equal(single.profiles.length, 1);
+  assert.equal(single.profiles[0].name, "Me");
+  assert.equal(single.profiles[0].settings.cycleLength, 30);
+  assert.equal(single.activeProfileId, single.profiles[0].id);
+
+  const multi = normalizeState({
+    activeProfileId: "missing",
+    profiles: [{ id: "a", name: "  ", periods: [] }, null, { id: "b", name: "Mia", periods: "junk", settings: { cycleLength: 999 } }]
+  });
+  assert.deepEqual(multi.profiles.map(p => [p.id, p.name, p.periods.length, p.settings.cycleLength]), [
+    ["a", "Person 1", 0, 28],
+    ["b", "Mia", 0, 90]
+  ]);
+  assert.equal(multi.activeProfileId, "a");
+  assert.equal(normalizeState({ profiles: [] }).profiles.length, 1);
 });
 
 test("legacy import returns null when only demo data exists", () => {

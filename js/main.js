@@ -3,7 +3,8 @@
 import { addDays, diffDays, formatDate, formatMonth, formatRange, plural, todayKey } from "./dates.js";
 import { buildDayMap, findPeriodOn, getStatus, periodDays, sortPeriods, validatePeriod } from "./cycle.js";
 import {
-  emptyState, exportState, importState, loadState, migrateLegacy, newId, normalizeSettings, saveState
+  MAX_NAME_LENGTH, cleanName, emptyState, exportState, importState, loadState, migrateLegacy, newId, newProfile,
+  normalizeSettings, saveState
 } from "./store.js";
 
 let data = emptyState();
@@ -15,26 +16,43 @@ let pendingDate = null; // callback for the date-picker sheet
 
 const $ = selector => document.querySelector(selector);
 
+const escapeHtml = text => String(text).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
+
+// The person whose periods are shown; everything below works on them.
+const activeProfile = () => data.profiles.find(p => p.id === data.activeProfileId) || data.profiles[0];
+const periodsOf = () => activeProfile().periods;
+const settingsOf = () => activeProfile().settings;
+
+function withActiveProfile(changes) {
+  const id = activeProfile().id;
+  return { ...data, profiles: data.profiles.map(p => (p.id === id ? { ...p, ...changes } : p)) };
+}
+
 // --- State changes -----------------------------------------------------------
 
-function commit(periods, message) {
-  undoState = data;
-  data = { ...data, periods: sortPeriods(periods) };
+// Saves a new state; undoable changes keep the previous one for the toast's Undo.
+function update(next, message, undoable = true) {
+  undoState = undoable ? data : null;
+  data = next;
   saveState(data);
   closeSheet();
   render();
-  toast(message, true);
+  if (message) toast(message, undoable);
+}
+
+function commit(periods, message) {
+  update(withActiveProfile({ periods: sortPeriods(periods) }), message);
 }
 
 function tryCommit(candidate, periods, message) {
-  const error = validatePeriod(candidate, data.periods, todayKey());
+  const error = validatePeriod(candidate, periodsOf(), todayKey());
   if (error) return toast(error);
   commit(periods, message);
 }
 
 function startPeriod(day) {
   const today = todayKey();
-  const periods = data.periods;
+  const periods = periodsOf();
   if (day > today) return toast("A period can't start in the future.");
 
   const existing = findPeriodOn(periods, day, today);
@@ -46,7 +64,7 @@ function startPeriod(day) {
   // Earlier than the latest period: it's a past period, so ask for its end too.
   if (last && day < last.start) {
     const next = sorted.find(p => p.start > day);
-    const guess = addDays(day, data.settings.periodLength - 1);
+    const guess = addDays(day, settingsOf().periodLength - 1);
     const end = [guess, addDays(next.start, -1), today].sort()[0];
     return openEditor({ id: null, start: day, end });
   }
@@ -61,21 +79,21 @@ function startPeriod(day) {
 }
 
 function endPeriod(periodId, day) {
-  const period = data.periods.find(p => p.id === periodId);
+  const period = periodsOf().find(p => p.id === periodId);
   if (!period) return;
   const updated = { ...period, end: day };
-  tryCommit(updated, data.periods.map(p => (p.id === periodId ? updated : p)), `Period ended ${formatDate(day)}`);
+  tryCommit(updated, periodsOf().map(p => (p.id === periodId ? updated : p)), `Period ended ${formatDate(day)}`);
 }
 
 function moveStart(periodId, day) {
-  const period = data.periods.find(p => p.id === periodId);
+  const period = periodsOf().find(p => p.id === periodId);
   if (!period) return;
   const updated = { ...period, start: day };
-  tryCommit(updated, data.periods.map(p => (p.id === periodId ? updated : p)), `Start moved to ${formatDate(day)}`);
+  tryCommit(updated, periodsOf().map(p => (p.id === periodId ? updated : p)), `Start moved to ${formatDate(day)}`);
 }
 
 function deletePeriod(periodId) {
-  commit(data.periods.filter(p => p.id !== periodId), "Period deleted");
+  commit(periodsOf().filter(p => p.id !== periodId), "Period deleted");
 }
 
 function undo() {
@@ -156,10 +174,10 @@ function saveEditor(form) {
   const candidate = { id: id || newId(), start: form.start.value, end: ongoing ? null : form.end.value || null };
   if (!ongoing && !candidate.end) return showEditorError("Choose the last day, or tick “Still going”.");
 
-  const error = validatePeriod(candidate, data.periods, todayKey());
+  const error = validatePeriod(candidate, periodsOf(), todayKey());
   if (error) return showEditorError(error);
 
-  const periods = id ? data.periods.map(p => (p.id === id ? candidate : p)) : [...data.periods, candidate];
+  const periods = id ? periodsOf().map(p => (p.id === id ? candidate : p)) : [...periodsOf(), candidate];
   commit(periods, id ? "Period updated" : "Period added");
 }
 
@@ -167,10 +185,84 @@ function showEditorError(message) {
   $("#editor-error").textContent = message;
 }
 
+// --- People -------------------------------------------------------------------------
+
+function renderProfileRows() {
+  return data.profiles.map(p => {
+    const count = p.periods.length;
+    const active = p.id === activeProfile().id;
+    return `
+      <li>
+        <button class="row-btn" data-action="switch-profile" data-id="${p.id}" ${active ? `aria-current="true"` : ""}>
+          <span>
+            <strong>${escapeHtml(p.name)}</strong>
+            <span class="muted">${count ? plural(count, "period") : "No periods yet"}</span>
+          </span>
+          <span class="muted">${active ? "Showing ✓" : "Show"}</span>
+        </button>
+        <button class="btn small" data-action="edit-profile" data-id="${p.id}" aria-label="Edit ${escapeHtml(p.name)}">Edit</button>
+      </li>`;
+  }).join("");
+}
+
+function openProfiles() {
+  openSheet(`
+    ${sheetHeader("People", "Each person has their own periods and predictions.")}
+    <ul class="rows people">${renderProfileRows()}</ul>
+    <button class="btn block" data-action="add-profile">+ Add person</button>
+  `);
+}
+
+function openProfileEditor(profile) {
+  const isNew = !profile;
+  openSheet(`
+    ${sheetHeader(isNew ? "Add person" : "Edit person")}
+    <form id="profile-form" data-id="${isNew ? "" : profile.id}">
+      <label class="field">
+        <span>Name</span>
+        <input name="person-name" type="text" maxlength="${MAX_NAME_LENGTH}" value="${isNew ? "" : escapeHtml(profile.name)}" placeholder="e.g. Me, Mia" autocomplete="off" required>
+      </label>
+      <button class="btn primary block" type="submit">${isNew ? "Add person" : "Save"}</button>
+      ${!isNew && data.profiles.length > 1
+        ? `<button class="btn danger-text block" type="button" data-action="delete-profile" data-id="${profile.id}">Delete ${escapeHtml(profile.name)} and their periods</button>`
+        : ""}
+    </form>
+  `);
+  $("#profile-form").elements["person-name"].focus();
+}
+
+function saveProfileForm(form) {
+  const input = form.elements["person-name"];
+  const name = cleanName(input.value, "");
+  if (!name) return input.focus();
+  const id = form.dataset.id;
+  if (id) {
+    update({ ...data, profiles: data.profiles.map(p => (p.id === id ? { ...p, name } : p)) }, "Saved", false);
+  } else {
+    const profile = newProfile(name);
+    update({ ...data, activeProfileId: profile.id, profiles: [...data.profiles, profile] }, `Added ${name}`, false);
+  }
+}
+
+function switchProfile(id) {
+  if (id === activeProfile().id) return closeSheet();
+  const next = { ...data, activeProfileId: id };
+  update(next, `Showing ${next.profiles.find(p => p.id === id).name}`, false);
+}
+
+function deleteProfile(id) {
+  const profile = data.profiles.find(p => p.id === id);
+  if (!profile || data.profiles.length < 2) return;
+  if (!confirm(`Delete ${profile.name} and all their periods?`)) return;
+  const profiles = data.profiles.filter(p => p.id !== id);
+  const activeProfileId = id === data.activeProfileId ? profiles[0].id : data.activeProfileId;
+  update({ ...data, activeProfileId, profiles }, `Deleted ${profile.name}`);
+}
+
 function openDaySheet(day) {
   const today = todayKey();
-  const period = findPeriodOn(data.periods, day, today);
-  const kind = buildDayMap(data.periods, data.settings, today).get(day);
+  const period = findPeriodOn(periodsOf(), day, today);
+  const kind = buildDayMap(periodsOf(), settingsOf(), today).get(day);
   let body;
 
   if (period) {
@@ -187,7 +279,7 @@ function openDaySheet(day) {
     body = `<p class="muted">${kind === "predicted" ? "A period is predicted around this day." : "Nothing predicted for this day."}</p>`;
   } else {
     // A period that started shortly before this day can be extended to it.
-    const before = sortPeriods(data.periods).filter(p => p.start < day).pop();
+    const before = sortPeriods(periodsOf()).filter(p => p.start < day).pop();
     const extendable = before && before.end && diffDays(before.start, day) < 15;
     body = `
       <p class="muted">No period logged on this day.</p>
@@ -203,15 +295,17 @@ function openDaySheet(day) {
 
 function renderToday() {
   const today = todayKey();
-  const status = getStatus(data.periods, data.settings, today);
+  const status = getStatus(periodsOf(), settingsOf(), today);
   const { stats } = status;
   const pm = stats.variation ? `<span class="pm">± ${plural(stats.variation, "day")}</span>` : "";
+  // With several people, say whose data this is.
+  const who = data.profiles.length > 1 ? `${escapeHtml(activeProfile().name)} · ` : "";
   let hero;
 
   if (status.phase === "empty") {
     hero = `
       <section class="card hero">
-        <p class="eyebrow">Welcome</p>
+        <p class="eyebrow">${who}Welcome</p>
         <h1>When did your last period start?</h1>
         <p class="muted">Log it once and Flow will predict your next periods. Each period you log makes predictions more accurate.</p>
         <button class="btn primary block" data-action="start" data-day="${today}">It started today</button>
@@ -221,7 +315,7 @@ function renderToday() {
     const endGuess = status.expectedEnd < today ? status.expectedEnd : today;
     hero = `
       <section class="card hero period">
-        <p class="eyebrow">On your period</p>
+        <p class="eyebrow">${who}On period</p>
         <h1>Day ${status.periodDay}</h1>
         <p class="muted">Started ${formatDate(status.last.start)}.
           ${status.stale
@@ -237,7 +331,7 @@ function renderToday() {
   } else if (status.phase === "late") {
     hero = `
       <section class="card hero late">
-        <p class="eyebrow">Next period</p>
+        <p class="eyebrow">${who}Next period</p>
         <h1>${plural(status.daysLate, "day")} late</h1>
         <p class="muted">Expected ${formatDate(status.nextStart)} · cycle day ${status.cycleDay}</p>
         <button class="btn primary block" data-action="start" data-day="${today}">Period started today</button>
@@ -246,7 +340,7 @@ function renderToday() {
   } else {
     hero = `
       <section class="card hero">
-        <p class="eyebrow">Next period</p>
+        <p class="eyebrow">${who}Next period</p>
         <h1>${status.daysUntil === 0 ? "Expected today" : status.daysUntil === 1 ? "Tomorrow" : `In ${status.daysUntil} days`}</h1>
         <p class="muted">${formatDate(status.nextStart)} ${pm} · cycle day ${status.cycleDay}</p>
         <button class="btn primary block" data-action="start" data-day="${today}">Period started today</button>
@@ -288,7 +382,7 @@ function renderToday() {
 
 function renderCalendar() {
   const today = todayKey();
-  const dayMap = buildDayMap(data.periods, data.settings, today);
+  const dayMap = buildDayMap(periodsOf(), settingsOf(), today);
   const first = calendarMonth;
   const [year, month] = first.split("-").map(Number);
   const daysInMonth = new Date(year, month, 0).getDate();
@@ -324,7 +418,7 @@ function renderCalendar() {
 
 function renderHistory() {
   const today = todayKey();
-  const sorted = sortPeriods(data.periods);
+  const sorted = sortPeriods(periodsOf());
   const rows = sorted.map((p, i) => {
     const next = sorted[i + 1];
     const length = p.end ? plural(periodDays(p), "day") : `day ${diffDays(p.start, today) + 1}, still going`;
@@ -356,10 +450,17 @@ function renderHistory() {
 }
 
 function renderSettings() {
-  const { cycleLength, periodLength } = data.settings;
+  const { cycleLength, periodLength } = settingsOf();
   return `
     <section class="card">
-      <h3>Typical lengths</h3>
+      <div class="card-head">
+        <h3>People</h3>
+        <button class="btn small" data-action="add-profile">+ Add</button>
+      </div>
+      <ul class="rows people">${renderProfileRows()}</ul>
+    </section>
+    <section class="card">
+      <h3>Typical lengths${data.profiles.length > 1 ? ` for ${escapeHtml(activeProfile().name)}` : ""}</h3>
       <p class="hint">Used for predictions until you've logged enough periods. After that, Flow learns them from your history.</p>
       <div class="two">
         <label class="field">
@@ -387,6 +488,7 @@ const views = { today: renderToday, calendar: renderCalendar, history: renderHis
 
 function render() {
   $("#view").innerHTML = views[tab]();
+  $("#profile-name").textContent = activeProfile().name;
   document.querySelectorAll("[data-tab]").forEach(btn => {
     btn.setAttribute("aria-current", btn.dataset.tab === tab ? "page" : "false");
   });
@@ -426,7 +528,7 @@ const actions = {
   }),
   "end": el => endPeriod(el.dataset.id, el.dataset.day),
   "end-other": el => {
-    const period = data.periods.find(p => p.id === el.dataset.id);
+    const period = periodsOf().find(p => p.id === el.dataset.id);
     openDatePicker({
       title: "When did it end?",
       value: el.dataset.day,
@@ -455,7 +557,7 @@ const actions = {
     render();
   },
   "add": () => openEditor({ id: null, start: "", end: "" }),
-  "edit": el => openEditor(data.periods.find(p => p.id === el.dataset.id)),
+  "edit": el => openEditor(periodsOf().find(p => p.id === el.dataset.id)),
   "delete": el => {
     if (confirm("Delete this period?")) deletePeriod(el.dataset.id);
   },
@@ -468,14 +570,17 @@ const actions = {
     setTimeout(() => URL.revokeObjectURL(link.href), 1000);
   },
   "erase": () => {
-    if (!confirm("Erase all periods and settings from this device? This can't be undone unless you have a backup.")) return;
-    data = emptyState();
-    undoState = null;
-    saveState(data);
-    render();
-    toast("All data erased");
-  }
+    if (!confirm("Erase all people, periods and settings from this device? This can't be undone unless you have a backup.")) return;
+    update(emptyState(), "All data erased", false);
+  },
+  "profiles": () => openProfiles(),
+  "switch-profile": el => switchProfile(el.dataset.id),
+  "add-profile": () => openProfileEditor(null),
+  "edit-profile": el => openProfileEditor(data.profiles.find(p => p.id === el.dataset.id)),
+  "delete-profile": el => deleteProfile(el.dataset.id)
 };
+
+const countPeriods = state => state.profiles.reduce((sum, p) => sum + p.periods.length, 0);
 
 function setupEvents() {
   document.addEventListener("click", event => {
@@ -489,9 +594,9 @@ function setupEvents() {
   });
 
   document.addEventListener("submit", event => {
-    if (event.target.id !== "editor") return;
     event.preventDefault();
-    saveEditor(event.target);
+    if (event.target.id === "editor") saveEditor(event.target);
+    else if (event.target.id === "profile-form") saveProfileForm(event.target);
   });
 
   document.addEventListener("change", async event => {
@@ -499,22 +604,15 @@ function setupEvents() {
     if (target.name === "ongoing") {
       target.form.end.disabled = target.checked;
     } else if (target.id === "set-cycle" || target.id === "set-period") {
-      data = {
-        ...data,
-        settings: normalizeSettings({ cycleLength: $("#set-cycle").value, periodLength: $("#set-period").value })
-      };
-      saveState(data);
-      render();
-      toast("Saved");
+      const settings = normalizeSettings({ cycleLength: $("#set-cycle").value, periodLength: $("#set-period").value });
+      update(withActiveProfile({ settings }), "Saved", false);
     } else if (target.id === "import-file" && target.files[0]) {
       try {
         const imported = importState(JSON.parse(await target.files[0].text()));
-        if (!confirm(`Replace your current data with ${plural(imported.periods.length, "period")} from this backup?`)) return;
-        undoState = data;
-        data = imported;
-        saveState(data);
-        render();
-        toast("Backup imported", true);
+        const summary = `${plural(imported.profiles.length, "person")} and ${plural(countPeriods(imported), "period")}`
+          .replace("persons", "people");
+        if (!confirm(`Replace all current data with ${summary} from this backup?`)) return;
+        update(imported, "Backup imported");
       } catch (err) {
         toast(err.message.startsWith("This file") ? err.message : "That file couldn't be read.");
       } finally {
@@ -539,7 +637,7 @@ async function init() {
     const migrated = await migrateLegacy();
     data = migrated || emptyState();
     saveState(data);
-    if (migrated) toast(`Imported ${plural(migrated.periods.length, "period")} from the previous version`);
+    if (migrated) toast(`Imported ${plural(countPeriods(migrated), "period")} from the previous version`);
   }
   render();
 
